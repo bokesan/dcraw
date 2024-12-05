@@ -9294,7 +9294,7 @@ konica_400z:
       top_margin  = 96;
       left_margin = 46;
     } else if (raw_width == 11904) {
-      // 100MP sensor, e.g. H2D 100C, CFV 100C
+      // 100MP sensor, e.g. X2D 100C, CFV 100C
       height = 8750;
       width = 11664;
       top_margin = (8842 - height) / 2;
