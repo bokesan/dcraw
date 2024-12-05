@@ -23,7 +23,7 @@
    $Date: 2018/06/01 20:36:25 $
  */
 
-#define DCRAW_VERSION "9.28"
+#define DCRAW_VERSION "9.29cb"
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -9293,6 +9293,12 @@ konica_400z:
       width  = 8280;
       top_margin  = 96;
       left_margin = 46;
+    } else if (raw_width == 11904) {
+      // 100MP sensor, e.g. H2D 100C, CFV 100C
+      height = 8750;
+      width = 11664;
+      top_margin = (8842 - height) / 2;
+      left_margin = (raw_width - width) / 2;
     } else if (raw_width == 9044) {
       height = 6716;
       width  = 8964;
@@ -10106,7 +10112,7 @@ int CLASS main (int argc, const char **argv)
 
   if (argc == 1) {
     printf(_("\nRaw photo decoder \"dcraw\" v%s"), DCRAW_VERSION);
-    printf(_("\nby Dave Coffin, dcoffin a cybercom o net\n"));
+    printf(_("\noriginal code by Dave Coffin. This version: https://github.com/bokesan/dcraw\n"));
     printf(_("\nUsage:  %s [OPTION]... [FILE]...\n\n"), argv[0]);
     puts(_("-v        Print verbose messages"));
     puts(_("-c        Write image data to standard output"));

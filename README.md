@@ -5,10 +5,19 @@ This repository contains an unofficial mirror of Dave Coffin's dcraw with full v
 
 Branches:
 - **master**: Dave Coffin's code, this [README.md](README.md), and [LICENSE](LICENSE). No other changes.
-- **debian**: adds Debian testing patches.
-- **ncruces-dev**: improves DNG support and avoids creating temporary files.
-- **ncruces-win**: adds various hacks to make unicode paths work on Windows.
-- **ncruces-wasm**: adds various hacks to run on WASI-compliant runtimes.
+- **main**: New development branch.
+
+Versions in **main** continue Dave Coffin's numbering, with suffix "cb" added.
+
+Version history:
+
+| Date       | Version | Changes |
+| ---------- | ------- | -------------
+| 2024-12-05 |  9.29cb | Support Hasselblad X2D 100C and CFV 100C          |
+| 2018-06-01 |   9.28  | Last version released by Dave Coffin              |
+
+
+---
 
 The rest of this [README.md](README.md) is a markdown translation of Dave Coffin's dcraw [website](https://dechifro.org/dcraw/).
 
