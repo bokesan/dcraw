@@ -9297,8 +9297,8 @@ konica_400z:
       // 100MP sensor, e.g. X2D 100C, CFV 100C
       height = 8750;
       width = 11664;
-      top_margin = (8842 - height) / 2;
-      left_margin = (raw_width - width) / 2;
+      top_margin = 92;
+      left_margin = 124;
     } else if (raw_width == 9044) {
       height = 6716;
       width  = 8964;
