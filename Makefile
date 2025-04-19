@@ -1,8 +1,12 @@
-OPTIMIZE = -march=native -O3 -ffast-math
-CFLAGS = -Wall $(OPTIMIZE) -DNO_JASPER -I/opt/homebrew/include -L/opt/homebrew/lib
+OPTIMIZE = -g -march=native -O3 -ffast-math
+CFLAGS = -Wall $(OPTIMIZE) -DNO_JASPER -I/opt/homebrew/include
+LDFLAGS = -L/opt/homebrew/lib
 
-dcraw: dcraw.c
-	$(CC) $(CFLAGS) -o dcraw dcraw.c -lm -ljpeg -llcms2
+dcraw: dcraw.o panasonic.o
+	$(CC) $(CFLAGS) $(LDFLAGS) -o dcraw dcraw.o panasonic.o -lm -ljpeg -llcms2
+
+dcraw.o : panasonic.h
+panasonic.o : bits.h panasonic.h
 
 bits_test: bits_test.c bits.h
 	$(CC) $(CFLAGS) -o bits_test bits_test.c

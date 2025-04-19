@@ -23,7 +23,7 @@
    $Date: 2018/06/01 20:36:25 $
  */
 
-#define DCRAW_VERSION "9.29cb"
+#define DCRAW_VERSION "9.30cb"
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
@@ -96,6 +96,8 @@ typedef unsigned long long UINT64;
 #define ushort unsigned short
 #endif
 
+#include "panasonic.h"
+
 /*
    All global variables are defined here, and all functions that
    access them are prefixed with "CLASS".  For thread-safety, all
@@ -121,6 +123,7 @@ unsigned tile_width, tile_length, gpsdata[32], load_flags;
 unsigned flip, tiff_flip, filters, colors;
 ushort raw_height, raw_width, height, width, top_margin, left_margin;
 ushort shrink, iheight, iwidth, fuji_width, thumb_width, thumb_height;
+struct panasonic_raw_tags_t pana_tags;
 ushort *raw_image, (*image)[4], cblack[4102];
 ushort white[8][8], curve[0x10000], cr2_slice[3], sraw_mul[4];
 double pixel_aspect, aber[4]={1,1,1,1}, gamm[6]={ 0.45,4.5,0,0,0,0 };
@@ -2023,6 +2026,11 @@ void CLASS panasonic_load_raw()
 {
   int row, col, i, j, sh=0, pred[2], nonz[2];
 
+  if (pana_tags.raw_format == 8) {
+       panasonicC8_load_raw(ifp, raw_image, raw_width, raw_height, &pana_tags);
+       return;
+  }
+  
   pana_bits(0);
   for (row=0; row < height; row++)
     for (col=0; col < raw_width; col++) {
@@ -5692,6 +5700,7 @@ int CLASS parse_tiff_ifd (int base)
   struct jhead jh;
   FILE *sfp;
 
+  pana_tags.raw_format = 0;
   if (tiff_nifds >= sizeof tiff_ifd / sizeof tiff_ifd[0])
     return 1;
   ifd = tiff_nifds++;
@@ -5726,11 +5735,143 @@ int CLASS parse_tiff_ifd (int base)
 	fseek (ifp, 12, SEEK_CUR);
 	FORC3 cam_mul[c] = get2();
 	break;
+      case 45:
+	if (ifd != 0 || type != 3) break;
+	pana_tags.raw_format = get2();
+	break;
       case 46:
 	if (type != 7 || fgetc(ifp) != 0xff || fgetc(ifp) != 0xd8) break;
 	thumb_offset = ftell(ifp) - 2;
 	thumb_length = len;
 	break;
+    case 0x0039:
+	 if (type == 7 && len == 26) {
+	      ushort cnt = get2();
+	      if (cnt > 6)
+		   cnt = 6;
+	      for (i = 0; i < cnt; i++)
+		   pana_tags.tag39[i] = get4();
+	 }
+	 break;
+    case 0x003A:
+	 if (type == 7 && len == 26) {
+	      ushort cnt = get2();
+	      if (cnt > 6)
+		   cnt = 6;
+	      for (i = 0; i < cnt; i++) {
+		   get2();
+		   pana_tags.tag3A[i] = get2();
+	      }
+	 }
+	 break;
+    case 0x003B:
+	 if (type == 3 && len == 1)
+	      pana_tags.tag3B = get2();
+	 break;
+    case 0x003F:
+	 if (type == 3 && len == 1)
+	      pana_tags.initial[tag - 0x3c] = get2();
+	 break;
+    case 0x0040:
+	 if (type == 7 && len == 70)
+	 {
+	      ushort count = get2();
+	      if (count > 17) count = 17;
+	      for (i = 0; i < count; i++)
+	      {
+		   ushort v1 = get2();
+		   if (v1 > 16u) v1 = 16u;
+		   pana_tags.tag40a[i] = v1;
+		   ushort v2 = get2();
+		   if (v2 > 0xfffu)
+			v2 = 0xfffu;
+		   pana_tags.tag40b[i] = v2;
+	      }
+	 }
+	 break;
+    case 0x0041:
+	 if (type == 7 && len == 36)
+	 {
+	      ushort count = get2();
+	      if (count > 17)
+		   count = 17;
+	      for (i = 0; i < count; i++)
+	      {
+		   ushort v1 = get2();
+		   if (v1 > 0x40u) v1 = 64;
+		   pana_tags.tag41[i] = v1;
+	      }
+	 }
+	 break;
+    case 0x0042:
+	 if (type == 3 && len == 1)
+	 {
+	      ushort val = get2();
+	      if (val > 5)
+		   val = 5;
+	      pana_tags.stripe_count = val;
+	 }
+	 break;
+    case 0x0043:
+	 if (type == 3 && len == 1)
+	 {
+	      ushort val = get2();
+	      if (val > 5)
+		   val = 5;
+	      pana_tags.tag43 = val;
+	 }
+	 break;
+    case 0x0044:
+	 if (type == 7 && len == 50)
+	 {
+	      ushort count = get2();
+	      if (count > 5)
+		   count = 5;
+	      for (i = 0; i < count; i++)
+		   pana_tags.stripe_offsets[i] = get4();
+	 }
+	 break;
+    case 0x0045:
+	 if (type == 7 && len == 50)
+	 {
+	      ushort count = get2();
+	      if (count > 5)
+		   count = 5;
+	      for (i = 0; i < count; i++)
+		   pana_tags.stripe_left[i] = get4();
+	 }
+	 break;
+      case 0x0046:
+	   if (type == 7 && len == 50)
+	   {
+		ushort count = get2();
+		if (count > 5)
+		     count = 5;
+		for (i = 0; i < count; i++)
+		     pana_tags.stripe_compressed_size[i] = get4();
+	   }
+	   break;
+    case 0x0047:
+	 if (type == 7 && len == 26)
+	 {
+	      ushort count = get2();
+	      if (count > 5)
+		   count = 5;
+	      for (i = 0; i < count; i++)
+		   pana_tags.stripe_width[i] = get2();
+	 }
+	 break;
+    case 0x0048:
+	 if (type == 7 && len == 26)
+	 {
+	      ushort count = get2();
+	      if (count > 5)
+		   count = 5;
+	      for (i = 0; i < count; i++)
+		   pana_tags.stripe_height[i] = get2();
+	 }
+	 break;
+	 
       case 61440:			/* Fuji HS10 table */
 	fseek (ifp, get4()+base, SEEK_SET);
 	parse_tiff_ifd (base);
