@@ -2027,7 +2027,7 @@ void CLASS panasonic_load_raw()
   int row, col, i, j, sh=0, pred[2], nonz[2];
 
   if (pana_tags.raw_format == 8) {
-       panasonicC8_load_raw(ifp, raw_image, raw_width, raw_height, &pana_tags);
+       panasonicC8_load_raw(ifp, raw_image, raw_width, raw_height, &pana_tags, verbose);
        return;
   }
   
@@ -5684,6 +5684,27 @@ void CLASS parse_kodak_ifd (int base)
   }
 }
 
+static ushort clamp_ushort(ushort x, ushort max)
+{
+     return (x <= max) ? x : max;
+}
+
+static void get_short_array(ushort *dest, ushort n)
+{
+  ushort count = clamp_ushort(get2(), n);
+  for (int i = 0; i < count; i++) {
+    dest[i] = get2();
+  }
+}
+
+static void get_long_array(unsigned *dest, ushort n)
+{
+  ushort count = clamp_ushort(get2(), n);
+  for (int i = 0; i < count; i++) {
+    dest[i] = get4();
+  }
+}
+
 void CLASS parse_minolta (int base);
 int CLASS parse_tiff (int base);
 
@@ -5744,134 +5765,68 @@ int CLASS parse_tiff_ifd (int base)
 	thumb_offset = ftell(ifp) - 2;
 	thumb_length = len;
 	break;
-    case 0x0039:
-	 if (type == 7 && len == 26) {
-	      ushort cnt = get2();
-	      if (cnt > 6)
-		   cnt = 6;
-	      for (i = 0; i < cnt; i++)
-		   pana_tags.tag39[i] = get4();
-	 }
-	 break;
-    case 0x003A:
-	 if (type == 7 && len == 26) {
-	      ushort cnt = get2();
-	      if (cnt > 6)
-		   cnt = 6;
-	      for (i = 0; i < cnt; i++) {
-		   get2();
-		   pana_tags.tag3A[i] = get2();
-	      }
-	 }
-	 break;
-    case 0x003B:
-	 if (type == 3 && len == 1)
-	      pana_tags.tag3B = get2();
-	 break;
-    case 0x003F:
-	 if (type == 3 && len == 1)
-	      pana_tags.initial[tag - 0x3c] = get2();
-	 break;
-    case 0x0040:
-	 if (type == 7 && len == 70)
-	 {
-	      ushort count = get2();
-	      if (count > 17) count = 17;
-	      for (i = 0; i < count; i++)
-	      {
-		   ushort v1 = get2();
-		   if (v1 > 16u) v1 = 16u;
-		   pana_tags.tag40a[i] = v1;
-		   ushort v2 = get2();
-		   if (v2 > 0xfffu)
-			v2 = 0xfffu;
-		   pana_tags.tag40b[i] = v2;
-	      }
-	 }
-	 break;
-    case 0x0041:
-	 if (type == 7 && len == 36)
-	 {
-	      ushort count = get2();
-	      if (count > 17)
-		   count = 17;
-	      for (i = 0; i < count; i++)
-	      {
-		   ushort v1 = get2();
-		   if (v1 > 0x40u) v1 = 64;
-		   pana_tags.tag41[i] = v1;
-	      }
-	 }
-	 break;
-    case 0x0042:
-	 if (type == 3 && len == 1)
-	 {
-	      ushort val = get2();
-	      if (val > 5)
-		   val = 5;
-	      pana_tags.stripe_count = val;
-	 }
-	 break;
-    case 0x0043:
-	 if (type == 3 && len == 1)
-	 {
-	      ushort val = get2();
-	      if (val > 5)
-		   val = 5;
-	      pana_tags.tag43 = val;
-	 }
-	 break;
-    case 0x0044:
-	 if (type == 7 && len == 50)
-	 {
-	      ushort count = get2();
-	      if (count > 5)
-		   count = 5;
-	      for (i = 0; i < count; i++)
-		   pana_tags.stripe_offsets[i] = get4();
-	 }
-	 break;
-    case 0x0045:
-	 if (type == 7 && len == 50)
-	 {
-	      ushort count = get2();
-	      if (count > 5)
-		   count = 5;
-	      for (i = 0; i < count; i++)
-		   pana_tags.stripe_left[i] = get4();
-	 }
-	 break;
+      case 0x0039:
+	if (type == 7 && len == 26)
+	  get_long_array(pana_tags.tag39, 6);
+	break;
+      case 0x003A:
+	if (type == 7 && len == 26) {
+	  ushort cnt = clamp_ushort(get2(), 6);
+	  for (i = 0; i < cnt; i++) {
+	    get2();
+	    pana_tags.tag3A[i] = get2();
+	  }
+	}
+	break;
+      case 0x003B:
+	if (type == 3 && len == 1)
+	  pana_tags.tag3B = get2();
+	break;
+      case 0x003F:
+	if (type == 3 && len == 1)
+	  pana_tags.initial[tag - 0x3c] = get2();
+	break;
+      case 0x0040:
+	if (type == 7 && len == 70) {
+	  ushort count = clamp_ushort(get2(), 17);
+	  for (i = 0; i < count; i++) {
+	    ushort hi = clamp_ushort(get2(), 16);
+	    ushort lo = clamp_ushort(get2(), 0x0fff); // not a typo
+	    pana_tags.tag40[i] = ((unsigned) hi << 16) | lo;
+	  }
+	}
+	break;
+      case 0x0041:
+	if (type == 7 && len == 36) {
+	  ushort count = clamp_ushort(get2(), 17);
+	  for (i = 0; i < count; i++)
+	    pana_tags.tag41[i] = clamp_ushort(get2(), 64);
+	}
+	break;
+      case 0x0042:
+	if (type == 3 && len == 1)
+	  pana_tags.stripe_count = clamp_ushort(get2(), 5);
+	break;
+      case 0x0044:
+	if (type == 7 && len == 50)
+	  get_long_array(pana_tags.stripe_offsets, 5);
+	break;
+      case 0x0045:
+	if (type == 7 && len == 50)
+	  get_long_array(pana_tags.stripe_left, 5);
+	break;
       case 0x0046:
-	   if (type == 7 && len == 50)
-	   {
-		ushort count = get2();
-		if (count > 5)
-		     count = 5;
-		for (i = 0; i < count; i++)
-		     pana_tags.stripe_compressed_size[i] = get4();
-	   }
-	   break;
-    case 0x0047:
-	 if (type == 7 && len == 26)
-	 {
-	      ushort count = get2();
-	      if (count > 5)
-		   count = 5;
-	      for (i = 0; i < count; i++)
-		   pana_tags.stripe_width[i] = get2();
-	 }
-	 break;
-    case 0x0048:
-	 if (type == 7 && len == 26)
-	 {
-	      ushort count = get2();
-	      if (count > 5)
-		   count = 5;
-	      for (i = 0; i < count; i++)
-		   pana_tags.stripe_height[i] = get2();
-	 }
-	 break;
-	 
+	if (type == 7 && len == 50)
+	  get_long_array(pana_tags.stripe_compressed_size, 5);
+	break;
+      case 0x0047:
+	if (type == 7 && len == 26)
+	  get_short_array(pana_tags.stripe_width, 5);
+	break;
+      case 0x0048:
+	if (type == 7 && len == 26)
+          get_short_array(pana_tags.stripe_height, 5);
+	break;
       case 61440:			/* Fuji HS10 table */
 	fseek (ifp, get4()+base, SEEK_SET);
 	parse_tiff_ifd (base);

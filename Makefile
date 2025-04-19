@@ -1,4 +1,4 @@
-OPTIMIZE = -g -march=native -O3 -ffast-math
+OPTIMIZE = -march=native -O3 -ffast-math
 CFLAGS = -Wall $(OPTIMIZE) -DNO_JASPER -I/opt/homebrew/include
 LDFLAGS = -L/opt/homebrew/lib
 

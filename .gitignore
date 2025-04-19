@@ -5,5 +5,9 @@
 *.dSYM
 *.NEF
 *.RW2
+*.tiff
+*.tif
+*.ppm
+*.pgm
 /dcraw
 /bits_test

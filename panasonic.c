@@ -112,6 +112,22 @@ struct param_t
 static int32_t param_gammaCurve(const struct param_t *p, uint32_t idx);
 static void param_init(struct param_t *p, const struct panasonic_raw_tags_t *meta);
 
+static void param_show(const struct param_t *p, FILE *f)
+{
+     fprintf(f, "Panasonic Compression 8 parameters:\n");
+     fprintf(f, "  Gamma: %s\n", p->use_gamma ? "yes" : "no");
+     fprintf(f, "  Extra Huffmann table: %s\n", p->use_extrahuff ? "yes" : "no");
+     fprintf(f, "  Initial: ");
+     for (int i = 0; i < 4; i++)
+	  fprintf(f, " %6u", p->initial[i]);
+     fprintf(f, "\n  Tag 0x39:");
+     for (int i = 0; i < 6; i++)
+	  fprintf(f, " %6u", p->tag39[i]);
+     fprintf(f, "\n  Tag 0x3A:");
+     for (int i = 0; i < 6; i++)
+	  fprintf(f, " %6u", p->tag3A[i]);
+     fprintf(f, "\n  Tag 0x3B: %6u %6u\n", p->tag3B, p->tag3B_2);
+}
 
 static uint32_t param_GetDBit(const struct param_t *p, uint64_t a2)
 {
@@ -131,16 +147,16 @@ static uint32_t limit_nat(int32_t value, uint32_t max)
      return (uint32_t) value;
 }
 
-bool param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
-		    unsigned int width,
-		    unsigned int height,
-		    uint16_t left_margin,
-		    uint16_t *raw_image, unsigned raw_width)
+static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
+			   unsigned int width,
+			   unsigned int height,
+			   uint16_t left_margin,
+			   uint16_t *raw_image, unsigned raw_width)
 {
      unsigned halfwidth = width >> 1;
      unsigned halfheight = height >> 1;
      if (halfwidth == 0 || halfheight == 0 || bufio_size(bufio) < 9)
-	  return false; // invalid input
+	  fatal("invalid input to DecodeC8");
 
      uint32_t datamax = param->tag3B_2;
 
@@ -167,7 +183,7 @@ bool param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 	       if (bitportion < 0) {
 		    uint32_t inqword_next = inqword + 1;
 		    if ((int)inqword + 1 >= (int)jobsz_in_qwords)
-			 return false;
+			 fatal("internal error 1 in DecodeC8");
 		    bitportion += 64;
 		    uint64_t inputqword = bufio_getQWord(bufio, inqword);
 		    uint64_t inputqword_next = bufio_getQWord(bufio, inqword_next);
@@ -177,7 +193,7 @@ bool param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 		    }
 	       } else {
 		    if ((unsigned int)inqword >= jobsz_in_qwords)
-			 return false;
+			 fatal("internal error 2 in DecodeC8");
 		    uint64_t inputqword = bufio_getQWord(bufio, inqword);
 		    pixbits = (inputqword >> bitportion) | bittail;
 		    uint32_t step = (bitportion == 0);
@@ -265,14 +281,14 @@ bool param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 	       }
 	  }
      }
-     return true;
 }
 
 
 void panasonicC8_load_raw(FILE *input,
 			  uint16_t *raw_image,
 			  unsigned int raw_width, unsigned int raw_height,
-			  const struct panasonic_raw_tags_t *tags)
+			  const struct panasonic_raw_tags_t *tags,
+			  int verbose)
 {
      unsigned totalw = 0;
      if (tags->stripe_count <= 0 || tags->stripe_count > 5)
@@ -289,17 +305,17 @@ void panasonicC8_load_raw(FILE *input,
 
      struct param_t param;
      param_init(&param, tags);
+     if (verbose)
+	  param_show(&param, stderr);
      struct bufio_t bufio;
      for (int stream = 0; stream < tags->stripe_count; stream++) {
 	  unsigned exactbytes = bytes_to_qwords(tags->stripe_compressed_size[stream]);
 	  bufio_init(&bufio, input, tags->stripe_offsets[stream], exactbytes);
-	  int r = !param_DecodeC8(&param, &bufio,
+	  param_DecodeC8(&param, &bufio,
 				  tags->stripe_width[stream],
 				  tags->stripe_height[stream],
 				  tags->stripe_left[stream],
 				  raw_image, raw_width);
-	  if (r)
-	       fatal("error decoding strip");
      }
 }
 
@@ -315,7 +331,7 @@ static void param_init(struct param_t *p, const struct panasonic_raw_tags_t *met
 	  p->initial[i] = meta->initial[i];
 
      for (int i = 0; i < 17; i++)
-	  p->huff_coeff[i] = ((uint32_t)(meta->tag41[i]) << 24) | ((uint32_t)(meta->tag40a[i]) << 16) | meta->tag40b[i];
+	  p->huff_coeff[i] = ((uint32_t)(meta->tag41[i]) << 24) | meta->tag40[i];
 
      p->use_gamma = false;
      for (unsigned i = 0; i < 0x10000; i++) {
