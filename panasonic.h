@@ -7,9 +7,9 @@
 struct panasonic_raw_tags_t
 {
      uint16_t raw_format;
+     uint16_t tag3B;
      uint32_t tag39[6];
      uint16_t tag3A[6];
-     uint16_t tag3B;
      uint16_t initial[4];
      uint32_t tag40[17];
      uint16_t tag41[17];
