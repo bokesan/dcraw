@@ -6,10 +6,6 @@
 #include "panasonic.h"
 #include "bits.h"
 
-// in 8-byte words, 800kb
-#define BUFSIZE 102400
-
-
 extern void fatal(const char *) __attribute__ ((noreturn));
 
 void fatal(const char *err)
@@ -35,38 +31,32 @@ static size_t bytes_to_qwords(size_t num_bytes)
 
 
 
+#define BUFSIZE_QWORDS 8192
+
 struct bufio_t
 {
-     uint64_t *data;
      FILE *input;
-     int64_t baseoffset;
-     int64_t begin, end;
-     uint32_t _size;
+     uint32_t baseoffset; // byte offset in file
+     uint32_t begin, end; // qword index
+     uint32_t size; // size in bytes
+     uint64_t data[BUFSIZE_QWORDS];
 };
 
-static void bufio_init(struct bufio_t *p, FILE *stream, int64_t start, uint32_t len)
+static void bufio_init(struct bufio_t *p, FILE *stream, uint32_t start, uint32_t len)
 {
-     p->data = calloc(BUFSIZE, sizeof (uint64_t));
-     if (p->data == NULL)
-	  fatal("out of memoty in bufio_init");
      p->input = stream;
      p->baseoffset = start;
      p->begin = 0;
      p->end = 0;
-     p->_size = len;
-}
-
-static uint32_t bufio_size(const struct bufio_t *p)
-{
-     return bytes_to_qwords(p->_size) * 8;
+     p->size = len;
 }
 
 static void bufio_refill(struct bufio_t *p, uint32_t newoffset)
 {
      if (fseek(p->input, p->baseoffset + newoffset * sizeof(int64_t), SEEK_SET) != 0)
 	  fatal("IO error in bufio_refill");
-     uint32_t remainwords = bytes_to_qwords(p->_size - newoffset*sizeof(int64_t));
-     uint32_t toread = (remainwords < BUFSIZE) ? remainwords : BUFSIZE;
+     uint32_t remainwords = bytes_to_qwords(p->size - newoffset*sizeof(int64_t));
+     uint32_t toread = (remainwords <= BUFSIZE_QWORDS) ? remainwords : BUFSIZE_QWORDS;
      size_t readwords = fread(p->data, 8, toread, p->input);
      if ((ssize_t)readwords < (ssize_t)toread - 1LL)
 	  fatal("EOF in bufio_refill");
@@ -180,7 +170,7 @@ static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 {
      unsigned halfwidth = width >> 1;
      unsigned halfheight = height >> 1;
-     if (halfwidth == 0 || halfheight == 0 || bufio_size(bufio) < 9)
+     if (halfwidth == 0 || halfheight == 0 || bufio->size < 9)
 	  fatal("invalid input to DecodeC8");
 
      uint32_t start_coeff[4];
@@ -189,7 +179,7 @@ static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
      for(int i = 0; i < 4; i++)
 	  line_base[i] = start_coeff[i] = param->initial[i] & 0xffffu;
 
-     uint32_t jobsz_in_qwords = bufio_size(bufio) >> 3;
+     uint32_t jobsz_in_qwords = bytes_to_qwords(bufio->size);
      unsigned doublewidth = 4 * halfwidth;
      uint8_t outline[4 * doublewidth];
      int64_t bittail = 0;
@@ -313,8 +303,15 @@ void panasonicC8_load_raw(FILE *input,
 	  param_show(&param, stderr);
      struct bufio_t bufio;
      for (int stream = 0; stream < tags->stripe_count; stream++) {
-	  unsigned exactbytes = bytes_to_qwords(tags->stripe_compressed_size[stream]);
-	  bufio_init(&bufio, input, tags->stripe_offsets[stream], exactbytes);
+	  if (verbose)
+	       fprintf(stderr, "Loading stripe %d: offset 0x%08x, compressed size: %u, width %d, height %u, left %u\n",
+		       stream,
+		       tags->stripe_offsets[stream],
+		       tags->stripe_compressed_size[stream],
+		       tags->stripe_width[stream],
+		       tags->stripe_height[stream],
+		       tags->stripe_left[stream]);
+	  bufio_init(&bufio, input, tags->stripe_offsets[stream], tags->stripe_compressed_size[stream]);
 	  param_DecodeC8(&param, &bufio,
 			 tags->stripe_width[stream],
 			 tags->stripe_height[stream],
