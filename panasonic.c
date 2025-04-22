@@ -42,24 +42,26 @@ struct bufio_t
      uint64_t data[BUFSIZE_QWORDS];
 };
 
-static void bufio_init(struct bufio_t *p, FILE *stream, uint32_t start, uint32_t len)
+static void bufio_init(struct bufio_t *p, FILE *stream, uint32_t start, uint32_t total_bits)
 {
      p->input = stream;
      p->baseoffset = start;
      p->begin = 0;
      p->end = 0;
-     p->size = len;
+     p->size = (total_bits + 7) / 8;
 }
 
 static void bufio_refill(struct bufio_t *p, uint32_t newoffset)
 {
-     if (fseek(p->input, p->baseoffset + newoffset * sizeof(int64_t), SEEK_SET) != 0)
+     if (fseek(p->input, p->baseoffset + newoffset * sizeof(uint64_t), SEEK_SET) != 0)
 	  fatal("IO error in bufio_refill");
-     uint32_t remainwords = bytes_to_qwords(p->size - newoffset*sizeof(int64_t));
-     uint32_t toread = (remainwords <= BUFSIZE_QWORDS) ? remainwords : BUFSIZE_QWORDS;
-     size_t readwords = fread(p->data, 8, toread, p->input);
-     if ((ssize_t)readwords < (ssize_t)toread - 1LL)
-	  fatal("EOF in bufio_refill");
+     size_t bytes = p->size - newoffset * sizeof (uint64_t);
+     if (bytes > BUFSIZE_QWORDS * sizeof (uint64_t))
+	  bytes = BUFSIZE_QWORDS * sizeof (uint64_t);
+     size_t readbytes = fread(p->data, 1, bytes, p->input);
+     if (readbytes != bytes)
+          fatal("EOF in bufio_refill");
+     uint32_t readwords = bytes_to_qwords(readbytes);
      reverse_bits(p->data, readwords);
      p->begin = newoffset;
      p->end = newoffset + readwords;
@@ -304,7 +306,7 @@ void panasonicC8_load_raw(FILE *input,
      struct bufio_t bufio;
      for (int stream = 0; stream < tags->stripe_count; stream++) {
 	  if (verbose)
-	       fprintf(stderr, "Loading stripe %d: offset 0x%08x, compressed size: %u, width %d, height %u, left %u\n",
+	       fprintf(stderr, "Loading stripe %d: offset 0x%08x, compressed size: %u bits, width %d, height %u, left %u\n",
 		       stream,
 		       tags->stripe_offsets[stream],
 		       tags->stripe_compressed_size[stream],

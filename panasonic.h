@@ -13,11 +13,11 @@ struct panasonic_raw_tags_t
      uint16_t initial[4];
      uint32_t tag40[17];
      uint16_t tag41[17];
-     uint16_t stripe_count; // 0x42
-     uint32_t stripe_offsets[5]; //0x44
-     uint32_t stripe_left[5]; // 0x45
-     uint32_t stripe_compressed_size[5]; //0x46
-     uint16_t stripe_width[5]; //0x47
+     uint16_t stripe_count;
+     uint32_t stripe_offsets[5];	// absolute position in file
+     uint32_t stripe_left[5];
+     uint32_t stripe_compressed_size[5]; // size in bits!
+     uint16_t stripe_width[5];
      uint16_t stripe_height[5];
 };
 
