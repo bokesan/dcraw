@@ -5782,9 +5782,12 @@ int CLASS parse_tiff_ifd (int base)
 	if (type == 3 && len == 1)
 	  pana_tags.tag3B = get2();
 	break;
+      case 0x003C:
+      case 0x003D:
+      case 0x003E:
       case 0x003F:
 	if (type == 3 && len == 1)
-	  pana_tags.initial[tag - 0x3c] = get2();
+	  pana_tags.initial[tag - 0x3C] = get2();
 	break;
       case 0x0040:
 	if (type == 7 && len == 70) {
