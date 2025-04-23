@@ -82,7 +82,7 @@ struct param_t
      uint32_t tag39[6];
      uint32_t tag3A[6];
      uint16_t maxval;
-     uint32_t initial[4];
+     uint16_t initial[4];
      uint32_t huff_coeff[17];
      uint64_t hufftable1[17];
      uint64_t hufftable2[17];
@@ -99,7 +99,25 @@ static void param_show(const struct param_t *p, FILE *f)
 {
      fprintf(f, "Panasonic Compression 8 parameters:\n");
      fprintf(f, "  Gamma: %s\n", p->use_gamma ? "yes" : "no");
+     for (int i = 0; i < 17; i++) {
+	     fprintf(f, "  Huff %02d: %08x %016lx %016lx\n",
+		     i,
+		     p->huff_coeff[i],
+		     p->hufftable1[i], p->hufftable2[i]);
+     }
      fprintf(f, "  Extra Huffmann table: %s\n", p->use_extrahuff ? "yes" : "no");
+     if (p->use_extrahuff) {
+	     size_t start = 0;
+	     uint8_t val = p->extrahuff[0];
+	     for (size_t i = 1; i < 0x10000; i++) {
+		     if (p->extrahuff[i] != val) {
+			     fprintf(f, "      %5d - %5d: %2d\n", (int)start, (int)(i-1), val);
+			     start = i;
+			     val = p->extrahuff[i];
+		     }
+	     }
+	     fprintf(f, "      %5d - %5d: %2d\n", (int)start, 0xffff, val);
+     }
      fprintf(f, "  Initial: ");
      for (int i = 0; i < 4; i++)
 	  fprintf(f, " %6u", p->initial[i]);
@@ -170,23 +188,22 @@ static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 			   uint16_t left_margin,
 			   uint16_t *raw_image, unsigned raw_width)
 {
-     unsigned halfwidth = width >> 1;
-     unsigned halfheight = height >> 1;
+     const unsigned halfwidth = width >> 1;
+     const unsigned halfheight = height >> 1;
      if (halfwidth == 0 || halfheight == 0 || bufio->size < 9)
 	  fatal("invalid input to DecodeC8");
 
-     uint32_t start_coeff[4];
+     const uint32_t jobsz_in_qwords = bytes_to_qwords(bufio->size);
+     const unsigned doublewidth = 4 * halfwidth;
+     int64_t bittail = 0;
+     int bitportion = 0;
+     uint32_t inqword = 0;
      uint32_t line_base[4];
      uint32_t current_base[4];
-     for(int i = 0; i < 4; i++)
-	  line_base[i] = start_coeff[i] = param->initial[i] & 0xffffu;
+     for (int i = 0; i < 4; i++)
+	  line_base[i] = param->initial[i];
 
-     uint32_t jobsz_in_qwords = bytes_to_qwords(bufio->size);
-     unsigned doublewidth = 4 * halfwidth;
      uint8_t outline[4 * doublewidth];
-     int64_t bittail = 0;
-     int32_t bitportion = 0;
-     uint32_t inqword = 0;
 
      for (unsigned current_row = 0; current_row < halfheight; current_row++) {
 	  for (int i = 0; i < 4; i++)
@@ -196,17 +213,17 @@ static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 	       uint64_t pixbits;
 	       if (bitportion < 0) {
 		    uint32_t inqword_next = inqword + 1;
-		    if ((int)inqword + 1 >= (int)jobsz_in_qwords)
+		    if (inqword + 1 >= jobsz_in_qwords)
 			 fatal("internal error 1 in DecodeC8");
 		    bitportion += 64;
 		    uint64_t inputqword = bufio_getQWord(bufio, inqword);
 		    uint64_t inputqword_next = bufio_getQWord(bufio, inqword_next);
-		    pixbits = (inputqword_next >> bitportion) | (inputqword << (64 - (uint8_t)(bitportion & 0xffu)));
-		    if ((unsigned int)inqword < jobsz_in_qwords) {
+		    pixbits = (inputqword_next >> bitportion) | (inputqword << (64 - (bitportion & 0xff)));
+		    if (inqword < jobsz_in_qwords) {
 			 inqword = inqword_next;
 		    }
 	       } else {
-		    if ((unsigned int)inqword >= jobsz_in_qwords)
+		    if (inqword >= jobsz_in_qwords)
 			 fatal("internal error 2 in DecodeC8");
 		    uint64_t inputqword = bufio_getQWord(bufio, inqword);
 		    pixbits = (inputqword >> bitportion) | bittail;
@@ -215,21 +232,26 @@ static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 			 inqword++;
 		    }
 	       }
-	       int huff_index = 0;
+	       uint8_t huff_index;
+	       // highest 16 bits of pixbits used to get huff_index
 	       if (param->use_extrahuff)
 		    huff_index = param->extrahuff[(pixbits >> 48) & 0xffffu];
 	       else {
-		    huff_index = param_GetDBit(param, pixbits);
+		       huff_index = param_GetDBit(param, pixbits);
+		       if (huff_index > 16)
+			       fatal("internal error 3");
 	       }
-	       if (huff_index < 0 || huff_index > 16)
-		    fatal("internal error 3");
-	       int32_t v37 = (param->huff_coeff[huff_index] >> 24) & 0x1F;
-	       uint32_t hc = param->huff_coeff[huff_index];
-	       int64_t v38 = pixbits << ((hc >> 16) & 0x1F);
-	       uint64_t v90 = (uint32_t)(huff_index - v37);
-	       int32_t v39 = (uint16_t)((uint64_t)v38 >> ((uint8_t)v37 - (uint8_t)huff_index)) << ((param->huff_coeff[huff_index] >> 24) & 0xffu);
+	       const uint32_t hc = param->huff_coeff[huff_index];
+	       const uint8_t hc2_5 = (hc >> 16) & 0x1F;
+	       const uint8_t hc3 = (hc >> 24);
+	       const uint8_t hc3_5 = hc3 & 0x1F;
+	       // v38 is pixbits shifted by 0-31.
+	       int64_t v38 = pixbits << hc2_5;
+	       if (huff_index < hc3_5)
+		       fatal("signedness problem");
+	       int32_t v39 = (uint16_t)((uint64_t)v38 >> (hc3_5 - huff_index)) << hc3;
 	       
-	       if (huff_index - v37 <= 0)
+	       if (huff_index <= hc3_5)
 		    v39 &= 0xffff0000u;
 	       
 	       int32_t delta1;
@@ -237,15 +259,15 @@ static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 		    delta1 = (uint16_t)v39;
 	       else if (huff_index) {
 		    int32_t v40 = -1 << huff_index;
-		    if ((uint8_t)v37)
+		    if (hc3_5)
 			 delta1 = (uint16_t)v39 + v40;
 		    else
 			 delta1 = (uint16_t)v39 + v40 + 1;
 	       } else
 		    delta1 = 0;
 	       
-	       uint32_t v42 = bitportion - ((param->huff_coeff[huff_index] >> 16) & 0x1F);
-	       int32_t delta2 = (v37 & 0xff) ? (1 << (v37 - 1)) : 0;
+	       uint32_t v42 = bitportion - hc2_5;
+	       int32_t delta2 = hc3_5 ? (1 << (hc3_5 - 1)) : 0;
 	       uint32_t *destpixel = (uint32_t *)(outline + 16 * (col >> 2));
 	       
 	       int32_t delta = delta1 + delta2;
@@ -267,14 +289,14 @@ static void param_DecodeC8(const struct param_t *param, struct bufio_t *bufio,
 		    val = current_base[3] + delta;
 		    destpixel[3] = limit_nat(val, param->maxval);
 		    memcpy(current_base, destpixel, sizeof current_base);
+		    memcpy(line_base, outline, sizeof line_base);
 		    break;
 	       }
-	       if (huff_index <= v37)
+	       uint64_t v90 = (uint32_t)(huff_index - hc3_5);
+	       if (huff_index <= hc3_5)
 		    v90 = 0;
 	       bittail = v38 << v90;
 	       bitportion = (int32_t)(v42 - v90);
-	       if (col == 3)
-		    memcpy(line_base, outline, sizeof line_base);
 	  }
 
 	  write_raw(param, raw_image, raw_width, current_row, (const uint16_t *) outline, width, left_margin);
@@ -349,7 +371,7 @@ static void param_init(struct param_t *p, const struct panasonic_raw_tags_t *met
 	  uint32_t hlow = (hc >> 16) & 0x1F;
 	  int16_t v8 = 0;
 	  if ((hc & 0x1F0000) != 0) {
-	       int h7 = (hc >> 16) & 7;
+	       int h7 = hlow & 7;
 	       if (hlow - 1 >= 7) {
 		    uint32_t hdiff = h7 - hlow;
 		    v8 = 0;
@@ -366,7 +388,7 @@ static void param_init(struct param_t *p, const struct panasonic_raw_tags_t *met
 	  
 	  uint16_t v9 = hc & v8;
 	  if (v7 < hlow)
-	       v7 = (p->huff_coeff[hindex] >> 16) & 0x1F;
+		  v7 = hlow;
 	  p->hufftable2[hindex] = 0xFFFFULL << (64-hlow);
 	  p->hufftable1[hindex] = (uint64_t)v9 << (64-hlow);
      }
@@ -376,6 +398,8 @@ static void param_init(struct param_t *p, const struct panasonic_raw_tags_t *met
 	  uint64_t v17 = 0;
 	  for (int j = 0; j < 0x10000; j++) {
 	       p->extrahuff[j] = param_GetDBit(p, v17);
+	       if (p->extrahuff[j] > 16)
+		       fatal("invalid coefficient index in table init");
 	       v17 += 0x1000000000000ULL;
 	  }
      }
