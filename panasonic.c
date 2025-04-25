@@ -79,15 +79,11 @@ struct param_t {
   uint32_t tag3A[6];
   uint16_t maxval;
   uint16_t initial[4];
-  // bits 24-31: tag41, 0-64
-  // bits 16-23: tag40a, 0-17
-  // bits 0-15: tag40b, 0-0x0fff
-  uint32_t huff_coeff[17];
+  uint8_t huff_bits[17]; // values 0-16 inclusive
   uint64_t hufftable1[17];
   uint64_t hufftable2[17];
   bool use_gamma;
   uint16_t gamma_table[0x10000];
-  bool use_extrahuff;
   uint8_t extrahuff[0x10000];
 };
 
@@ -100,24 +96,20 @@ static void param_show(const struct param_t *p, FILE *f)
   fprintf(f, "Panasonic Compression 8 parameters:\n");
   fprintf(f, "  Gamma: %s\n", p->use_gamma ? "yes" : "no");
   for (int i = 0; i < 17; i++) {
-    fprintf(f, "  Huff %02d: %08x %016lx %016lx\n",
-	    i, p->huff_coeff[i], p->hufftable1[i], p->hufftable2[i]);
+    fprintf(f, "  Huff %02d: %02u %016lx %016lx\n",
+	    i, p->huff_bits[i], p->hufftable1[i], p->hufftable2[i]);
   }
-  fprintf(f, "  Extra Huffmann table: %s\n",
-	  p->use_extrahuff ? "yes" : "no");
-  if (p->use_extrahuff) {
-    size_t start = 0;
-    uint8_t val = p->extrahuff[0];
-    for (size_t i = 1; i < 0x10000; i++) {
-      if (p->extrahuff[i] != val) {
-	fprintf(f, "      %5d - %5d: %2d\n", (int) start, (int) (i - 1),
-		val);
-	start = i;
-	val = p->extrahuff[i];
-      }
+  fprintf(f, "  Extra Huffmann table:\n");
+  size_t start = 0;
+  uint8_t val = p->extrahuff[0];
+  for (size_t i = 1; i < 0x10000; i++) {
+    if (p->extrahuff[i] != val) {
+      fprintf(f, "      %5d - %5d: %2d\n", (int) start, (int) (i - 1), val);
+      start = i;
+      val = p->extrahuff[i];
     }
-    fprintf(f, "      %5d - %5d: %2d\n", (int) start, 0xffff, val);
   }
+  fprintf(f, "      %5d - %5d: %2d\n", (int) start, 0xffff, val);
   fprintf(f, "  Initial: ");
   for (int i = 0; i < 4; i++)
     fprintf(f, " %6u", p->initial[i]);
@@ -221,26 +213,18 @@ static void param_DecodeC8(const struct param_t *param,
 	  inputqword = bufio_next_qword(bufio);
 	}
       }
-      uint8_t huff_index;
       // highest 16 bits of pixbits used to get huff_index
-      if (param->use_extrahuff)
-	huff_index = param->extrahuff[(pixbits >> 48) & 0xffffu];
-      else {
-	huff_index = param_GetDBit(param, pixbits);
-	if (huff_index > 16)
-	  fatal("internal error 3");
-      }
-      const uint32_t hc = param->huff_coeff[huff_index];
-      const uint8_t hc2_5 = (hc >> 16) & 0x1F; // actual range 0-16 inclusive
-      pixbits <<= hc2_5;
-      const int32_t v39 = (huff_index == 0) ? 0 : (uint16_t) (pixbits >> (64 - huff_index));
+      const uint8_t huff_index = param->extrahuff[pixbits >> 48];
+      const uint8_t nbits = param->huff_bits[huff_index];
+      pixbits <<= nbits;
       int32_t delta;
-      if ((int64_t) pixbits < 0)
-	delta = (uint16_t) v39;
-      else if (huff_index != 0)
-	delta = (uint16_t) v39 - (1 << huff_index) + 1;
-      else
+      if (huff_index == 0) {
 	delta = 0;
+      } else {
+	delta = (uint16_t) (pixbits >> (64 - huff_index));
+	if ((int64_t) pixbits >= 0)
+	  delta += 1 - (1 << huff_index);
+      }
 
       uint32_t *destpixel = (uint32_t *) (outline + 16 * (col >> 2));
 
@@ -266,7 +250,7 @@ static void param_DecodeC8(const struct param_t *param,
 	break;
       }
       bittail = pixbits << huff_index;
-      bitportion -= hc2_5 + huff_index;
+      bitportion -= nbits + huff_index;
     }
 
     write_raw(param, raw_image, raw_width, current_row,
@@ -327,10 +311,7 @@ static void param_init(struct param_t *p,
   for (int i = 0; i < 17; i++) {
     if (meta->tag41[i] != 0)
       fatal("unsupported raw file: unexpected value in tag 0x0041");
-    p->huff_coeff[i] =
-      ((uint32_t) (meta->tag41[i]) << 24) |
-      ((uint32_t) (meta->tag40a[i]) << 16) |
-      meta->tag40b[i];
+    p->huff_bits[i] = meta->tag40a[i];
   }
 
   p->use_gamma = false;
@@ -341,15 +322,16 @@ static void param_init(struct param_t *p,
       p->use_gamma = true;
   }
 
-  uint32_t v7 = 0;
+  uint32_t max_bits = 0;
   for (unsigned hindex = 0; hindex < 17; hindex++) {
-    uint32_t hc = p->huff_coeff[hindex];
-    uint32_t hlow = (hc >> 16) & 0x1F;
+    uint8_t nbits = p->huff_bits[hindex];
+    if (nbits > max_bits)
+      max_bits = nbits;
     int16_t v8 = 0;
-    if ((hc & 0x1F0000) != 0) {
-      int h7 = hlow & 7;
-      if (hlow - 1 >= 7) {
-	uint32_t hdiff = h7 - hlow;
+    if (nbits != 0) {
+      int h7 = nbits & 7;
+      if (nbits >= 8) {
+	uint32_t hdiff = h7 - nbits;
 	v8 = 0;
 	do {
 	  v8 = (v8 << 8) | 0xFFu;
@@ -362,22 +344,17 @@ static void param_init(struct param_t *p,
 	v8 = 2 * v8 + 1;
     }
 
-    uint16_t v9 = hc & v8;
-    if (v7 < hlow)
-      v7 = hlow;
-    p->hufftable2[hindex] = 0xFFFFULL << (64 - hlow);
-    p->hufftable1[hindex] = (uint64_t) v9 << (64 - hlow);
+    uint16_t v9 = meta->tag40b[hindex] & v8;
+    p->hufftable1[hindex] = (uint64_t) v9 << (64 - nbits);
+    p->hufftable2[hindex] = 0xFFFFULL << (64 - nbits);
   }
 
-  p->use_extrahuff = (v7 < 17);
-  if (p->use_extrahuff) {
-    uint64_t v17 = 0;
-    for (int j = 0; j < 0x10000; j++) {
-      p->extrahuff[j] = param_GetDBit(p, v17);
-      if (p->extrahuff[j] > 16)
-	fatal("invalid coefficient index in table init");
-      v17 += 0x1000000000000ULL;
-    }
+  if (max_bits >= 17)
+    fatal("unsupported raw file: max. bits >= 17");
+  for (size_t j = 0; j < 0x10000; j++) {
+    p->extrahuff[j] = param_GetDBit(p, (uint64_t) j << 48);
+    if (p->extrahuff[j] > 16)
+      fatal("invalid coefficient index in table init");
   }
 }
 
