@@ -12,8 +12,9 @@ struct panasonic_raw_tags_t {
   uint32_t tag39[6];
   uint16_t tag3A[6];
   uint16_t initial[4];
-  uint32_t tag40[17];
-  uint16_t tag41[17];
+  uint16_t tag40b[17]; // range 0-0x0fff inclusive
+  uint8_t tag40a[17]; // range 0-16 inclusive
+  uint8_t tag41[17]; // range 0-64 inclusive
   uint16_t stripe_count;
   uint32_t stripe_offsets[5];	// absolute position in file
   uint32_t stripe_left[5];

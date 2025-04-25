@@ -5794,9 +5794,8 @@ int CLASS parse_tiff_ifd (int base)
 	if (type == 7 && len == 70) {
 	  ushort count = clamp_ushort(get2(), 17);
 	  for (i = 0; i < count; i++) {
-	    ushort hi = clamp_ushort(get2(), 16);
-	    ushort lo = clamp_ushort(get2(), 0x0fff); // not a typo
-	    pana_tags.tag40[i] = ((unsigned) hi << 16) | lo;
+	    pana_tags.tag40a[i] = (uchar) clamp_ushort(get2(), 16);
+	    pana_tags.tag40b[i] = clamp_ushort(get2(), 0x0fff); // not a typo
 	  }
 	}
 	break;
@@ -5804,7 +5803,7 @@ int CLASS parse_tiff_ifd (int base)
 	if (type == 7 && len == 36) {
 	  ushort count = clamp_ushort(get2(), 17);
 	  for (i = 0; i < count; i++)
-	    pana_tags.tag41[i] = clamp_ushort(get2(), 64);
+	    pana_tags.tag41[i] = (uchar) clamp_ushort(get2(), 64);
 	}
 	break;
       case 0x0042:

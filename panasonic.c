@@ -86,6 +86,9 @@ struct param_t {
   uint32_t tag3A[6];
   uint16_t maxval;
   uint16_t initial[4];
+  // bits 24-31: tag41, 0-64
+  // bits 16-23: tag40a, 0-17
+  // bits 0-15: tag40b, 0-0x0fff
   uint32_t huff_coeff[17];
   uint64_t hufftable1[17];
   uint64_t hufftable2[17];
@@ -197,8 +200,8 @@ static void param_DecodeC8(const struct param_t *param,
 
   const uint32_t jobsz_in_qwords = bytes_to_qwords(bufio->size);
   const unsigned doublewidth = 4 * halfwidth;
-  int64_t bittail = 0;
-  int bitportion = 0;
+  int bitportion = 0; // actual range: -32 (or -31?) - 64
+  uint64_t bittail = 0;
   uint32_t inqword = 0;
   uint32_t line_base[4];
   uint32_t current_base[4];
@@ -220,13 +223,11 @@ static void param_DecodeC8(const struct param_t *param,
 	bitportion += 64;
 	uint64_t inputqword = bufio_getQWord(bufio, inqword);
 	uint64_t inputqword_next = bufio_getQWord(bufio, inqword_next);
-	pixbits =
-	    (inputqword_next >> bitportion) | (inputqword <<
-					       (64 - (bitportion & 0xff)));
+	pixbits = (inputqword_next >> bitportion) | (inputqword << (64 - bitportion));
 	if (inqword < jobsz_in_qwords) {
 	  inqword = inqword_next;
 	}
-      } else {
+      } else { // bitportion >= 0
 	if (inqword >= jobsz_in_qwords)
 	  fatal("internal error 2 in DecodeC8");
 	uint64_t inputqword = bufio_getQWord(bufio, inqword);
@@ -246,36 +247,19 @@ static void param_DecodeC8(const struct param_t *param,
 	  fatal("internal error 3");
       }
       const uint32_t hc = param->huff_coeff[huff_index];
-      const uint8_t hc2_5 = (hc >> 16) & 0x1F;
-      const uint8_t hc3 = (hc >> 24);
-      const uint8_t hc3_5 = hc3 & 0x1F;
-      // v38 is pixbits shifted by 0-31.
-      int64_t v38 = pixbits << hc2_5;
-      if (huff_index < hc3_5)
-	fatal("signedness problem");
-      int32_t v39 =
-	  (uint16_t) ((uint64_t) v38 >> (hc3_5 - huff_index)) << hc3;
+      const uint8_t hc2_5 = (hc >> 16) & 0x1F; // actual range 0-16 inclusive
+      pixbits <<= hc2_5;
+      const int32_t v39 = (huff_index == 0) ? 0 : (uint16_t) (pixbits >> (64 - huff_index));
+      int32_t delta;
+      if ((int64_t) pixbits < 0)
+	delta = (uint16_t) v39;
+      else if (huff_index != 0)
+	delta = (uint16_t) v39 - (1 << huff_index) + 1;
+      else
+	delta = 0;
 
-      if (huff_index <= hc3_5)
-	v39 &= 0xffff0000u;
-
-      int32_t delta1;
-      if (v38 < 0)
-	delta1 = (uint16_t) v39;
-      else if (huff_index) {
-	int32_t v40 = -1 << huff_index;
-	if (hc3_5)
-	  delta1 = (uint16_t) v39 + v40;
-	else
-	  delta1 = (uint16_t) v39 + v40 + 1;
-      } else
-	delta1 = 0;
-
-      uint32_t v42 = bitportion - hc2_5;
-      int32_t delta2 = hc3_5 ? (1 << (hc3_5 - 1)) : 0;
       uint32_t *destpixel = (uint32_t *) (outline + 16 * (col >> 2));
 
-      int32_t delta = delta1 + delta2;
       int32_t val;
       switch (col & 3) {
       case 0:
@@ -297,11 +281,8 @@ static void param_DecodeC8(const struct param_t *param,
 	memcpy(line_base, outline, sizeof line_base);
 	break;
       }
-      uint64_t v90 = (uint32_t) (huff_index - hc3_5);
-      if (huff_index <= hc3_5)
-	v90 = 0;
-      bittail = v38 << v90;
-      bitportion = (int32_t) (v42 - v90);
+      bittail = pixbits << huff_index;
+      bitportion -= hc2_5 + huff_index;
     }
 
     write_raw(param, raw_image, raw_width, current_row,
@@ -359,9 +340,14 @@ static void param_init(struct param_t *p,
   for (int i = 0; i < 4; i++)
     p->initial[i] = meta->initial[i];
 
-  for (int i = 0; i < 17; i++)
+  for (int i = 0; i < 17; i++) {
+    if (meta->tag41[i] != 0)
+      fatal("unsupported raw file: unexpected value in tag 0x0041");
     p->huff_coeff[i] =
-	((uint32_t) (meta->tag41[i]) << 24) | meta->tag40[i];
+      ((uint32_t) (meta->tag41[i]) << 24) |
+      ((uint32_t) (meta->tag40a[i]) << 16) |
+      meta->tag40b[i];
+  }
 
   p->use_gamma = false;
   for (unsigned i = 0; i < 0x10000; i++) {
