@@ -149,7 +149,7 @@ static void write_raw(const struct param_t *restrict param,
 		      uint16_t *restrict raw_image, unsigned raw_width,
 		      unsigned current_row,
 		      const uint16_t *restrict srcrow,
-		      unsigned int width, uint16_t left_margin)
+		      unsigned int width, uint32_t left_margin)
 {
   unsigned destrow = current_row * 2;
   uint16_t *destrow0 = raw_image + (destrow * raw_width) + left_margin;
@@ -175,7 +175,7 @@ static void write_raw(const struct param_t *restrict param,
 
 static void param_DecodeC8(const struct param_t *param,
 			   struct bufio_t *bufio, unsigned int width,
-			   unsigned int height, uint16_t left_margin,
+			   unsigned int height, uint32_t left_margin,
 			   uint16_t *raw_image, unsigned raw_width)
 {
   const unsigned halfwidth = width / 2;
@@ -327,9 +327,9 @@ static void param_init(struct param_t *p,
     uint8_t nbits = p->huff_bits[hindex];
     if (nbits > max_bits)
       max_bits = nbits;
-    int16_t v8 = 0;
+    uint16_t v8 = 0;
     if (nbits != 0) {
-      int h7 = nbits & 7;
+      uint8_t h7 = nbits & 7;
       if (nbits >= 8) {
 	uint32_t hdiff = h7 - nbits;
 	v8 = 0;
@@ -340,8 +340,7 @@ static void param_init(struct param_t *p,
       } else {
 	v8 = 0;
       }
-      for (; h7 != 0; h7--)
-	v8 = 2 * v8 + 1;
+      v8 = (v8 << h7) | ((1 << h7) - 1);
     }
 
     uint16_t v9 = meta->tag40b[hindex] & v8;
@@ -366,19 +365,18 @@ static uint16_t param_gammaCurve(const struct param_t *p, uint16_t value)
 
   unsigned int v4 = (v2 < 0xFFFF) ? v2 : 0xFFFF;
 
-  int v5 = 0;
+  unsigned int v5 = 0;
   if ((v4 & 0x80000000) != 0)
     v4 = 0;
 
-  if (v4 >= (0xFFFF & p->tag3A[1])) {
+  if (v4 >= p->tag3A[1]) {
     v5 = 1;
-    if (v4 >= (0xFFFF & p->tag3A[2])) {
+    if (v4 >= p->tag3A[2]) {
       v5 = 2;
-      if (v4 >= (0xFFFF & p->tag3A[3])) {
+      if (v4 >= p->tag3A[3]) {
 	v5 = 3;
-	if (v4 >= (0xFFFF & p->tag3A[4]))
-	  v5 = ((v4 | 0x500000000LL) -
-		(uint64_t) (0xFFFF & p->tag3A[5])) >> 32;
+	if (v4 >= p->tag3A[4])
+	  v5 = (unsigned) (((v4 | 0x500000000LL) - p->tag3A[5]) >> 32);
       }
     }
   }
