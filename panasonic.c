@@ -36,50 +36,43 @@ static size_t bytes_to_qwords(size_t num_bytes)
 #define BUFSIZE_QWORDS 8192
 
 struct bufio_t {
+  size_t index; // index into data
+  size_t bytes_left;
   FILE *input;
-  uint32_t baseoffset;		// byte offset in file
-  uint32_t begin, end;		// qword index
-  uint32_t size;		// size in bytes
   uint64_t data[BUFSIZE_QWORDS];
 };
+
+static void bufio_fill(struct bufio_t *p)
+{
+  size_t bytes = BUFSIZE_QWORDS * 8;
+  if (bytes > p->bytes_left)
+    bytes = p->bytes_left;
+  size_t read = fread(p->data, 1, bytes, p->input);
+  if (read != bytes || bytes == 0)
+    fatal("EOF in decoding raw file");
+  reverse_bits(p->data, bytes_to_qwords(read));
+  p->bytes_left -= read;
+}
 
 static void bufio_init(struct bufio_t *p, FILE *stream, uint32_t start,
 		       uint32_t total_bits)
 {
   p->input = stream;
-  p->baseoffset = start;
-  p->begin = 0;
-  p->end = 0;
-  p->size = (total_bits + 7) / 8;
+  p->bytes_left = (total_bits + 7) / 8;
+  if (fseek(p->input, start, SEEK_SET) != 0)
+    fatal("IO error in bufio_init");
+  bufio_fill(p);
+  p->index = 0;
 }
 
-static void bufio_refill(struct bufio_t *p, uint32_t newoffset)
+static uint64_t bufio_next_qword(struct bufio_t *p)
 {
-  if (fseek
-      (p->input, p->baseoffset + newoffset * sizeof(uint64_t),
-       SEEK_SET) != 0)
-    fatal("IO error in bufio_refill");
-  size_t bytes = p->size - newoffset * sizeof(uint64_t);
-  if (bytes > BUFSIZE_QWORDS * sizeof(uint64_t))
-    bytes = BUFSIZE_QWORDS * sizeof(uint64_t);
-  size_t readbytes = fread(p->data, 1, bytes, p->input);
-  if (readbytes != bytes)
-    fatal("EOF in bufio_refill");
-  uint32_t readwords = bytes_to_qwords(readbytes);
-  reverse_bits(p->data, readwords);
-  p->begin = newoffset;
-  p->end = newoffset + readwords;
+  if (p->index == BUFSIZE_QWORDS) {
+    bufio_fill(p);
+    p->index = 0;
+  }
+  return p->data[p->index++];
 }
-
-static uint64_t bufio_getQWord(struct bufio_t *p, uint32_t offset)
-{
-  if (offset < p->begin || offset >= p->end)
-    bufio_refill(p, offset);
-  if (offset < p->begin || offset >= p->end)
-    fatal("bufio_getQWord: offset still out if range after refill");
-  return p->data[offset - p->begin];
-}
-
 
 struct param_t {
   uint32_t tag39[6];
@@ -139,7 +132,7 @@ static void param_show(const struct param_t *p, FILE *f)
 
 static uint8_t param_GetDBit(const struct param_t *p, uint64_t bits)
 {
-  for (int i = 0; i < 17; i++) {
+  for (uint8_t i = 0; i < 17; i++) {
     if ((bits & p->hufftable2[i]) == p->hufftable1[i])
       return i;
   }
@@ -166,12 +159,12 @@ static void write_raw(const struct param_t *restrict param,
 		      const uint16_t *restrict srcrow,
 		      unsigned int width, uint16_t left_margin)
 {
-  int destrow = current_row * 2;
+  unsigned destrow = current_row * 2;
   uint16_t *destrow0 = raw_image + (destrow * raw_width) + left_margin;
   uint16_t *destrow1 = raw_image + (destrow + 1) * raw_width + left_margin;
   if (param->use_gamma) {
     for (unsigned col = 0; col < width - 1; col += 2) {
-      const int c6 = col * 4;
+      const unsigned c6 = col * 4;
       destrow0[col] = param->gamma_table[srcrow[c6]];
       destrow0[col + 1] = param->gamma_table[srcrow[c6 + 2]];
       destrow1[col] = param->gamma_table[srcrow[c6 + 4]];
@@ -179,7 +172,7 @@ static void write_raw(const struct param_t *restrict param,
     }
   } else {
     for (unsigned col = 0; col < width - 1; col += 2) {
-      const int c6 = col * 4;
+      const unsigned c6 = col * 4;
       destrow0[col] = srcrow[c6];
       destrow0[col + 1] = srcrow[c6 + 2];
       destrow1[col] = srcrow[c6 + 4];
@@ -193,16 +186,14 @@ static void param_DecodeC8(const struct param_t *param,
 			   unsigned int height, uint16_t left_margin,
 			   uint16_t *raw_image, unsigned raw_width)
 {
-  const unsigned halfwidth = width >> 1;
-  const unsigned halfheight = height >> 1;
-  if (halfwidth == 0 || halfheight == 0 || bufio->size < 9)
+  const unsigned halfwidth = width / 2;
+  const unsigned halfheight = height / 2;
+  if (halfwidth == 0 || halfheight == 0)
     fatal("invalid input to DecodeC8");
 
-  const uint32_t jobsz_in_qwords = bytes_to_qwords(bufio->size);
   const unsigned doublewidth = 4 * halfwidth;
   int bitportion = 0; // actual range: -32 (or -31?) - 64
   uint64_t bittail = 0;
-  uint32_t inqword = 0;
   uint32_t line_base[4];
   uint32_t current_base[4];
   for (int i = 0; i < 4; i++)
@@ -210,6 +201,8 @@ static void param_DecodeC8(const struct param_t *param,
 
   uint8_t outline[4 * doublewidth];
 
+  uint64_t inputqword = bufio_next_qword(bufio);
+  
   for (unsigned current_row = 0; current_row < halfheight; current_row++) {
     for (int i = 0; i < 4; i++)
       current_base[i] = line_base[i];
@@ -217,24 +210,15 @@ static void param_DecodeC8(const struct param_t *param,
     for (unsigned col = 0; col < doublewidth; col++) {
       uint64_t pixbits;
       if (bitportion < 0) {
-	uint32_t inqword_next = inqword + 1;
-	if (inqword + 1 >= jobsz_in_qwords)
-	  fatal("internal error 1 in DecodeC8");
+	uint64_t inputqword_next = bufio_next_qword(bufio);
 	bitportion += 64;
-	uint64_t inputqword = bufio_getQWord(bufio, inqword);
-	uint64_t inputqword_next = bufio_getQWord(bufio, inqword_next);
 	pixbits = (inputqword_next >> bitportion) | (inputqword << (64 - bitportion));
-	if (inqword < jobsz_in_qwords) {
-	  inqword = inqword_next;
-	}
+	inputqword = inputqword_next;
       } else { // bitportion >= 0
-	if (inqword >= jobsz_in_qwords)
-	  fatal("internal error 2 in DecodeC8");
-	uint64_t inputqword = bufio_getQWord(bufio, inqword);
 	pixbits = (inputqword >> bitportion) | bittail;
 	if (bitportion == 0) {
 	  bitportion = 64;
-	  inqword++;
+	  inputqword = bufio_next_qword(bufio);
 	}
       }
       uint8_t huff_index;
@@ -263,19 +247,19 @@ static void param_DecodeC8(const struct param_t *param,
       int32_t val;
       switch (col & 3) {
       case 0:
-	val = current_base[0] + delta;
+	val = (int32_t) current_base[0] + delta;
 	destpixel[0] = limit_nat(val, param->maxval);
 	break;
       case 1:
-	val = current_base[2] + delta;
+	val = (int32_t) current_base[2] + delta;
 	destpixel[2] = limit_nat(val, param->maxval);
 	break;
       case 2:
-	val = current_base[1] + delta;
+	val = (int32_t) current_base[1] + delta;
 	destpixel[1] = limit_nat(val, param->maxval);
 	break;
       default:
-	val = current_base[3] + delta;
+	val = (int32_t) current_base[3] + delta;
 	destpixel[3] = limit_nat(val, param->maxval);
 	memcpy(current_base, destpixel, sizeof current_base);
 	memcpy(line_base, outline, sizeof line_base);
@@ -422,7 +406,7 @@ static uint16_t param_gammaCurve(const struct param_t *p, uint16_t value)
     }
   }
   unsigned int v6 = p->tag3A[v5];
-  int v7 = p->tag39[v5];
+  uint32_t v7 = p->tag39[v5];
   unsigned int v8 = v4 - (uint16_t) v6;
   char v9 = v7 & 0x1F;
   int64_t result = 0;
