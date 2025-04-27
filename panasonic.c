@@ -191,7 +191,7 @@ static void param_DecodeC8(const struct param_t *param,
   for (int i = 0; i < 4; i++)
     line_base[i] = param->initial[i];
 
-  uint8_t outline[4 * doublewidth];
+  uint32_t outline[doublewidth];
 
   uint64_t inputqword = bufio_next_qword(bufio);
   
@@ -225,27 +225,24 @@ static void param_DecodeC8(const struct param_t *param,
 	if ((int64_t) pixbits >= 0)
 	  delta += 1 - (1 << huff_index);
       }
-
-      uint32_t *destpixel = (uint32_t *) (outline + 16 * (col >> 2));
-
       int32_t val;
       switch (col & 3) {
       case 0:
 	val = (int32_t) current_base[0] + delta;
-	destpixel[0] = limit_nat(val, param->maxval);
+	outline[col] = limit_nat(val, param->maxval);
 	break;
       case 1:
 	val = (int32_t) current_base[2] + delta;
-	destpixel[2] = limit_nat(val, param->maxval);
+	outline[col+1] = limit_nat(val, param->maxval);
 	break;
       case 2:
 	val = (int32_t) current_base[1] + delta;
-	destpixel[1] = limit_nat(val, param->maxval);
+	outline[col-1] = limit_nat(val, param->maxval);
 	break;
       default:
 	val = (int32_t) current_base[3] + delta;
-	destpixel[3] = limit_nat(val, param->maxval);
-	memcpy(current_base, destpixel, sizeof current_base);
+	outline[col] = limit_nat(val, param->maxval);
+	memcpy(current_base, &outline[col-3], sizeof current_base);
 	memcpy(line_base, outline, sizeof line_base);
 	break;
       }
