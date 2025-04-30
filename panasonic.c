@@ -238,8 +238,8 @@ void panasonic_new_load_raw(FILE *restrict input,
 
 static void init_index_table(uint8_t index[restrict 0x10000], const struct panasonic_raw_params_t *restrict p)
 {
-  uint64_t table1[17];
-  uint64_t table2[17];
+  uint16_t table1[17];
+  uint16_t table2[17];
   
   for (int i = 0; i < 17; i++) {
     if (p->compression_param3[i] != 0)
@@ -263,21 +263,19 @@ static void init_index_table(uint8_t index[restrict 0x10000], const struct panas
       }
       v8 = (v8 << h7) | ((1 << h7) - 1);
     }
-
     uint16_t v9 = p->compression_param2[hindex] & v8;
-    table1[hindex] = (uint64_t) v9 << (64 - nbits);
-    table2[hindex] = 0xFFFFULL << (64 - nbits);
+    table1[hindex] = v9 << (16 - nbits);
+    table2[hindex] = 0xFFFF << (16 - nbits);
   }
 
-  for (size_t j = 0; j < 0x10000; j++) {
-    uint64_t bits = (uint64_t) j << 48;
+  for (size_t bits = 0; bits < 0x10000; bits++) {
     uint8_t idx;
     for (idx = 0; idx < 17; idx++) {
-      if ((bits & table2[idx]) == table1[idx])
+      if ((table2[idx] & bits) == table1[idx])
 	break;
     }
     if (idx > 16)
       fatal("invalid coefficient index in table init");
-    index[j] = idx;
+    index[bits] = idx;
   }
 }
