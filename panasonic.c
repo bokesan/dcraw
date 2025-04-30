@@ -74,48 +74,18 @@ static uint64_t bufio_next_qword(struct bufio_t *p)
   return p->data[p->index++];
 }
 
-struct param_t {
-  uint16_t maxval;
-  uint16_t initial[4];
-  uint8_t huff_bits[17]; // values 0-16 inclusive
-  uint64_t hufftable1[17];
-  uint64_t hufftable2[17];
-  uint8_t extrahuff[0x10000];
-};
+static void init_index_table(uint8_t index[restrict 0x10000], const struct panasonic_raw_params_t *restrict p);
 
-static void param_init(struct param_t *p, const struct panasonic_raw_tags_t *meta);
-
-static void param_show(const struct param_t *p, FILE *f)
+static void param_show(const struct panasonic_raw_params_t *p, FILE *f)
 {
-  fprintf(f, "Panasonic Compression 8 parameters:\n");
+  fprintf(f, "Panasonic Compression 8 parameters:\n  Bits:");
   for (int i = 0; i < 17; i++) {
-    fprintf(f, "  Huff %02d: %02u %016lx %016lx\n",
-	    i, p->huff_bits[i], p->hufftable1[i], p->hufftable2[i]);
+    fprintf(f, " %u", p->compression_bits[i]);
   }
-  fprintf(f, "  Extra Huffmann table:\n");
-  size_t start = 0;
-  uint8_t val = p->extrahuff[0];
-  for (size_t i = 1; i < 0x10000; i++) {
-    if (p->extrahuff[i] != val) {
-      fprintf(f, "      %5d - %5d: %2d\n", (int) start, (int) (i - 1), val);
-      start = i;
-      val = p->extrahuff[i];
-    }
-  }
-  fprintf(f, "      %5d - %5d: %2d\n", (int) start, 0xffff, val);
-  fprintf(f, "  Initial: ");
+  fprintf(f, "\n  Initial raw values:");
   for (int i = 0; i < 4; i++)
-    fprintf(f, " %6u", p->initial[i]);
+    fprintf(f, " %u", p->compression_initvalue[i]);
   fprintf(f, "\n  Maxval (Tag 0x3B): %u\n", p->maxval);
-}
-
-static uint8_t param_GetDBit(const struct param_t *p, uint64_t bits)
-{
-  for (uint8_t i = 0; i < 17; i++) {
-    if ((bits & p->hufftable2[i]) == p->hufftable1[i])
-      return i;
-  }
-  return 17;
 }
 
 static uint32_t limit_nat(int32_t value, uint32_t max)
@@ -144,7 +114,7 @@ static void write_raw(uint16_t *restrict raw_image, unsigned raw_width,
   }
 }
 
-static void param_DecodeC8(const struct param_t *param,
+static void param_DecodeC8(const struct panasonic_raw_params_t *param,
 			   struct bufio_t *bufio, unsigned int width,
 			   unsigned int height, uint32_t left_margin,
 			   uint16_t *raw_image, unsigned raw_width)
@@ -160,10 +130,12 @@ static void param_DecodeC8(const struct param_t *param,
   uint32_t line_base[4];
   uint32_t current_base[4];
   for (int i = 0; i < 4; i++)
-    line_base[i] = param->initial[i];
+    line_base[i] = param->compression_initvalue[i];
 
   uint32_t outline[doublewidth];
-
+  uint8_t extrahuff[0x10000];
+  init_index_table(extrahuff, param);
+  
   uint64_t inputqword = bufio_next_qword(bufio);
   
   for (unsigned current_row = 0; current_row < halfheight; current_row++) {
@@ -185,8 +157,8 @@ static void param_DecodeC8(const struct param_t *param,
 	}
       }
       // highest 16 bits of pixbits used to get huff_index
-      const uint8_t huff_index = param->extrahuff[pixbits >> 48];
-      const uint8_t nbits = param->huff_bits[huff_index];
+      const uint8_t huff_index = extrahuff[pixbits >> 48];
+      const uint8_t nbits = param->compression_bits[huff_index];
       pixbits <<= nbits;
       int32_t delta;
       if (huff_index == 0) {
@@ -227,11 +199,11 @@ static void param_DecodeC8(const struct param_t *param,
 }
 
 
-void panasonicC8_load_raw(FILE *input,
-			  uint16_t *raw_image,
-			  unsigned int raw_width, unsigned int raw_height,
-			  const struct panasonic_raw_tags_t *tags,
-			  int verbose)
+void panasonic_new_load_raw(FILE *restrict input,
+			    uint16_t *restrict raw_image,
+			    unsigned int raw_width, unsigned int raw_height,
+			    const struct panasonic_raw_params_t *restrict tags,
+			    int verbose)
 {
   unsigned totalw = 0;
   if (tags->stripe_count <= 0 || tags->stripe_count > 5)
@@ -244,10 +216,8 @@ void panasonicC8_load_raw(FILE *input,
   if (totalw != raw_width)
     fatal("invalid total stripe width");
 
-  struct param_t param;
-  param_init(&param, tags);
   if (verbose)
-    param_show(&param, stderr);
+    param_show(tags, stderr);
   struct bufio_t bufio;
   for (int stream = 0; stream < tags->stripe_count; stream++) {
     if (verbose)
@@ -259,30 +229,25 @@ void panasonicC8_load_raw(FILE *input,
 	      tags->stripe_left[stream]);
     bufio_init(&bufio, input, tags->stripe_offsets[stream],
 	       tags->stripe_compressed_size[stream]);
-    param_DecodeC8(&param, &bufio, tags->stripe_width[stream],
+    param_DecodeC8(tags, &bufio, tags->stripe_width[stream],
 		   tags->stripe_height[stream], tags->stripe_left[stream],
 		   raw_image, raw_width);
   }
 }
 
-static void param_init(struct param_t *p,
-		       const struct panasonic_raw_tags_t *meta)
-{
-  p->maxval = meta->tag3B;
-  for (int i = 0; i < 4; i++)
-    p->initial[i] = meta->initial[i];
 
+static void init_index_table(uint8_t index[restrict 0x10000], const struct panasonic_raw_params_t *restrict p)
+{
+  uint64_t table1[17];
+  uint64_t table2[17];
+  
   for (int i = 0; i < 17; i++) {
-    if (meta->tag41[i] != 0)
-      fatal("unsupported raw file: unexpected value in tag 0x0041");
-    p->huff_bits[i] = meta->tag40a[i];
+    if (p->compression_param3[i] != 0)
+      fatal("unsupported panasonic raw file: unexpected value in tag 0x0041");
   }
 
-  uint32_t max_bits = 0;
   for (unsigned hindex = 0; hindex < 17; hindex++) {
-    uint8_t nbits = p->huff_bits[hindex];
-    if (nbits > max_bits)
-      max_bits = nbits;
+    uint8_t nbits = p->compression_bits[hindex];
     uint16_t v8 = 0;
     if (nbits != 0) {
       uint8_t h7 = nbits & 7;
@@ -299,16 +264,20 @@ static void param_init(struct param_t *p,
       v8 = (v8 << h7) | ((1 << h7) - 1);
     }
 
-    uint16_t v9 = meta->tag40b[hindex] & v8;
-    p->hufftable1[hindex] = (uint64_t) v9 << (64 - nbits);
-    p->hufftable2[hindex] = 0xFFFFULL << (64 - nbits);
+    uint16_t v9 = p->compression_param2[hindex] & v8;
+    table1[hindex] = (uint64_t) v9 << (64 - nbits);
+    table2[hindex] = 0xFFFFULL << (64 - nbits);
   }
 
-  if (max_bits >= 17)
-    fatal("unsupported raw file: max. bits >= 17");
   for (size_t j = 0; j < 0x10000; j++) {
-    p->extrahuff[j] = param_GetDBit(p, (uint64_t) j << 48);
-    if (p->extrahuff[j] > 16)
+    uint64_t bits = (uint64_t) j << 48;
+    uint8_t idx;
+    for (idx = 0; idx < 17; idx++) {
+      if ((bits & table2[idx]) == table1[idx])
+	break;
+    }
+    if (idx > 16)
       fatal("invalid coefficient index in table init");
+    index[j] = idx;
   }
 }

@@ -124,7 +124,7 @@ unsigned tile_width, tile_length, gpsdata[32], load_flags;
 unsigned flip, tiff_flip, filters, colors;
 ushort raw_height, raw_width, height, width, top_margin, left_margin;
 ushort shrink, iheight, iwidth, fuji_width, thumb_width, thumb_height;
-struct panasonic_raw_tags_t pana_tags;
+struct panasonic_raw_params_t pana_tags;
 ushort *raw_image, (*image)[4], cblack[4102];
 ushort white[8][8], curve[0x10000], cr2_slice[3], sraw_mul[4];
 double pixel_aspect, aber[4]={1,1,1,1}, gamm[6]={ 0.45,4.5,0,0,0,0 };
@@ -2028,10 +2028,10 @@ void CLASS panasonic_load_raw()
   int row, col, i, j, sh=0, pred[2], nonz[2];
 
   if (pana_tags.raw_format == 8) {
-       panasonicC8_load_raw(ifp, raw_image, raw_width, raw_height, &pana_tags, verbose);
-       return;
+    panasonic_new_load_raw(ifp, raw_image, raw_width, raw_height, &pana_tags, verbose);
+    return;
   }
-  
+
   pana_bits(0);
   for (row=0; row < height; row++)
     for (col=0; col < raw_width; col++) {
@@ -5768,21 +5768,21 @@ int CLASS parse_tiff_ifd (int base)
 	break;
       case 0x003B:
 	if (type == 3 && len == 1)
-	  pana_tags.tag3B = get2();
+	  pana_tags.maxval = get2();
 	break;
       case 0x003C:
       case 0x003D:
       case 0x003E:
       case 0x003F:
 	if (type == 3 && len == 1)
-	  pana_tags.initial[tag - 0x3C] = get2();
+	  pana_tags.compression_initvalue[tag - 0x3C] = get2();
 	break;
       case 0x0040:
 	if (type == 7 && len == 70) {
 	  ushort count = clamp_ushort(get2(), 17);
 	  for (i = 0; i < count; i++) {
-	    pana_tags.tag40a[i] = (uchar) clamp_ushort(get2(), 16);
-	    pana_tags.tag40b[i] = clamp_ushort(get2(), 0x0fff); // not a typo
+	    pana_tags.compression_bits[i] = (uchar) clamp_ushort(get2(), 16);
+	    pana_tags.compression_param2[i] = clamp_ushort(get2(), 0x0fff); // not a typo
 	  }
 	}
 	break;
@@ -5790,7 +5790,7 @@ int CLASS parse_tiff_ifd (int base)
 	if (type == 7 && len == 36) {
 	  ushort count = clamp_ushort(get2(), 17);
 	  for (i = 0; i < count; i++)
-	    pana_tags.tag41[i] = (uchar) clamp_ushort(get2(), 64);
+	    pana_tags.compression_param3[i] = (uchar) clamp_ushort(get2(), 64);
 	}
 	break;
       case 0x0042:
