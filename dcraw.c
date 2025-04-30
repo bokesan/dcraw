@@ -5766,19 +5766,6 @@ int CLASS parse_tiff_ifd (int base)
 	thumb_offset = ftell(ifp) - 2;
 	thumb_length = len;
 	break;
-      case 0x0039:
-	if (type == 7 && len == 26)
-	  get_long_array(pana_tags.tag39, 6);
-	break;
-      case 0x003A:
-	if (type == 7 && len == 26) {
-	  ushort cnt = clamp_ushort(get2(), 6);
-	  for (i = 0; i < cnt; i++) {
-	    get2();
-	    pana_tags.tag3A[i] = get2();
-	  }
-	}
-	break;
       case 0x003B:
 	if (type == 3 && len == 1)
 	  pana_tags.tag3B = get2();

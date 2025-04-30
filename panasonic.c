@@ -75,26 +75,19 @@ static uint64_t bufio_next_qword(struct bufio_t *p)
 }
 
 struct param_t {
-  uint32_t tag39[6];
-  uint32_t tag3A[6];
   uint16_t maxval;
   uint16_t initial[4];
   uint8_t huff_bits[17]; // values 0-16 inclusive
   uint64_t hufftable1[17];
   uint64_t hufftable2[17];
-  bool use_gamma;
-  uint16_t gamma_table[0x10000];
   uint8_t extrahuff[0x10000];
 };
 
-static uint16_t param_gammaCurve(const struct param_t *p, uint16_t value);
-static void param_init(struct param_t *p,
-		       const struct panasonic_raw_tags_t *meta);
+static void param_init(struct param_t *p, const struct panasonic_raw_tags_t *meta);
 
 static void param_show(const struct param_t *p, FILE *f)
 {
   fprintf(f, "Panasonic Compression 8 parameters:\n");
-  fprintf(f, "  Gamma: %s\n", p->use_gamma ? "yes" : "no");
   for (int i = 0; i < 17; i++) {
     fprintf(f, "  Huff %02d: %02u %016lx %016lx\n",
 	    i, p->huff_bits[i], p->hufftable1[i], p->hufftable2[i]);
@@ -113,12 +106,6 @@ static void param_show(const struct param_t *p, FILE *f)
   fprintf(f, "  Initial: ");
   for (int i = 0; i < 4; i++)
     fprintf(f, " %6u", p->initial[i]);
-  fprintf(f, "\n  Tag 0x39:");
-  for (int i = 0; i < 6; i++)
-    fprintf(f, " %6u", p->tag39[i]);
-  fprintf(f, "\n  Tag 0x3A:");
-  for (int i = 0; i < 6; i++)
-    fprintf(f, " %6u", p->tag3A[i]);
   fprintf(f, "\n  Maxval (Tag 0x3B): %u\n", p->maxval);
 }
 
@@ -131,11 +118,6 @@ static uint8_t param_GetDBit(const struct param_t *p, uint64_t bits)
   return 17;
 }
 
-static uint16_t clamp_u16(uint16_t value, uint16_t max)
-{
-  return (value <= max) ? value : max;
-}
-
 static uint32_t limit_nat(int32_t value, uint32_t max)
 {
   if (value < 0)
@@ -145,8 +127,7 @@ static uint32_t limit_nat(int32_t value, uint32_t max)
   return (uint32_t) value;
 }
 
-static void write_raw(const struct param_t *restrict param,
-		      uint16_t *restrict raw_image, unsigned raw_width,
+static void write_raw(uint16_t *restrict raw_image, unsigned raw_width,
 		      unsigned current_row,
 		      const uint16_t *restrict srcrow,
 		      unsigned int width, uint32_t left_margin)
@@ -154,22 +135,12 @@ static void write_raw(const struct param_t *restrict param,
   unsigned destrow = current_row * 2;
   uint16_t *destrow0 = raw_image + (destrow * raw_width) + left_margin;
   uint16_t *destrow1 = raw_image + (destrow + 1) * raw_width + left_margin;
-  if (param->use_gamma) {
-    for (unsigned col = 0; col < width - 1; col += 2) {
-      const unsigned c6 = col * 4;
-      destrow0[col] = param->gamma_table[srcrow[c6]];
-      destrow0[col + 1] = param->gamma_table[srcrow[c6 + 2]];
-      destrow1[col] = param->gamma_table[srcrow[c6 + 4]];
-      destrow1[col + 1] = param->gamma_table[srcrow[c6 + 6]];
-    }
-  } else {
-    for (unsigned col = 0; col < width - 1; col += 2) {
-      const unsigned c6 = col * 4;
-      destrow0[col] = srcrow[c6];
-      destrow0[col + 1] = srcrow[c6 + 2];
-      destrow1[col] = srcrow[c6 + 4];
-      destrow1[col + 1] = srcrow[c6 + 6];
-    }
+  for (unsigned col = 0; col < width - 1; col += 2) {
+    const unsigned c6 = col * 4;
+    destrow0[col] = srcrow[c6];
+    destrow0[col + 1] = srcrow[c6 + 2];
+    destrow1[col] = srcrow[c6 + 4];
+    destrow1[col + 1] = srcrow[c6 + 6];
   }
 }
 
@@ -250,7 +221,7 @@ static void param_DecodeC8(const struct param_t *param,
       bitportion -= nbits + huff_index;
     }
 
-    write_raw(param, raw_image, raw_width, current_row,
+    write_raw(raw_image, raw_width, current_row,
 	      (const uint16_t *) outline, width, left_margin);
   }
 }
@@ -297,10 +268,6 @@ void panasonicC8_load_raw(FILE *input,
 static void param_init(struct param_t *p,
 		       const struct panasonic_raw_tags_t *meta)
 {
-  for (int i = 0; i < 6; i++) {
-    p->tag3A[i] = meta->tag3A[i];
-    p->tag39[i] = meta->tag39[i];
-  }
   p->maxval = meta->tag3B;
   for (int i = 0; i < 4; i++)
     p->initial[i] = meta->initial[i];
@@ -309,14 +276,6 @@ static void param_init(struct param_t *p,
     if (meta->tag41[i] != 0)
       fatal("unsupported raw file: unexpected value in tag 0x0041");
     p->huff_bits[i] = meta->tag40a[i];
-  }
-
-  p->use_gamma = false;
-  for (unsigned i = 0; i < 0x10000; i++) {
-    uint16_t val = param_gammaCurve(p, (uint16_t) i);
-    p->gamma_table[i] = val;
-    if (i != val)
-      p->use_gamma = true;
   }
 
   uint32_t max_bits = 0;
@@ -352,53 +311,4 @@ static void param_init(struct param_t *p,
     if (p->extrahuff[j] > 16)
       fatal("invalid coefficient index in table init");
   }
-}
-
-static uint16_t param_gammaCurve(const struct param_t *p, uint16_t value)
-{
-  unsigned int v2 = value | 0xFFFF0000;
-  if ((value & 0x10000) == 0)
-    v2 = value & 0x1FFFF;
-
-  unsigned int v4 = (v2 < 0xFFFF) ? v2 : 0xFFFF;
-
-  unsigned int v5 = 0;
-  if ((v4 & 0x80000000) != 0)
-    v4 = 0;
-
-  if (v4 >= p->tag3A[1]) {
-    v5 = 1;
-    if (v4 >= p->tag3A[2]) {
-      v5 = 2;
-      if (v4 >= p->tag3A[3]) {
-	v5 = 3;
-	if (v4 >= p->tag3A[4])
-	  v5 = (unsigned) (((v4 | 0x500000000LL) - p->tag3A[5]) >> 32);
-      }
-    }
-  }
-  unsigned int v6 = p->tag3A[v5];
-  uint32_t v7 = p->tag39[v5];
-  unsigned int v8 = v4 - (uint16_t) v6;
-  char v9 = v7 & 0x1F;
-  int64_t result = 0;
-
-  if (v9 == 31) {
-    result = (v5 == 5) ? 0xFFFFLL : ((p->tag3A[v5 + 1] >> 16) & 0xFFFF);
-    return clamp_u16((uint16_t) result, p->maxval);
-  }
-  if ((v7 & 0x10) == 0) {
-    if (v9 == 15) {
-      result = ((v6 >> 16) & 0xFFFF);
-      return clamp_u16((uint16_t) result, p->maxval);
-    } else if (v9 != 0) {
-      v8 = (v8 + (1 << (v9 - 1))) >> v9;
-    }
-  } else {
-    v8 <<= v7 & 0xF;
-  }
-  result = v8 + ((v6 >> 16) & 0xFFFF);
-  if (result < 0)
-    fatal("negative result of gamma");
-  return clamp_u16((uint16_t) result, p->maxval);
 }
